@@ -1,9 +1,13 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import base64
 import string
+import hashlib
+import requests
+import threading
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.fernet import Fernet
+from Crypto.Cipher import DES, Blowfish, ARC4
 
 class DecrypterApp:
     def __init__(self, root):
@@ -23,7 +27,17 @@ class DecrypterApp:
             "Caesar Cipher", 
             "Vigenere Cipher", 
             "Fernet", 
-            "AES-256-GCM"
+            "AES-256-GCM",
+            "DES",
+            "Blowfish",
+            "ARC4"
+        ]
+        
+        self.wordlist = [
+            "password", "123456", "12345678", "admin", "test", "guest", "root", 
+            "secret", "1234", "qwerty", "iloveyou", "password123", "letmein", 
+            "dragon", "baseball", "football", "monkey", "sunshine", "shadow", 
+            "cheese", "cipher", "sleuth", "key", "apple", "hello", "world"
         ]
         
         # Keep track of dynamic parameter widgets
@@ -72,6 +86,13 @@ class DecrypterApp:
         self.params_frame.pack(fill=tk.X, pady=(0, 15), ipadx=10, ipady=10)
         
         self.build_params()
+
+        # Wordlist Frame
+        self.wordlist_frame = ttk.LabelFrame(self.main_frame, text=f"Cracking Wordlist (Currently {len(self.wordlist)} words)")
+        self.wordlist_frame.pack(fill=tk.X, pady=(0, 15), ipadx=10, ipady=5)
+        
+        ttk.Button(self.wordlist_frame, text="Load local .txt file", command=self.load_wordlist).pack(side=tk.LEFT, padx=10, pady=5)
+        ttk.Button(self.wordlist_frame, text="Download Top 10k", command=self.download_wordlist).pack(side=tk.LEFT, pady=5)
         
         # Action Buttons
         btn_frame = ttk.Frame(self.main_frame)
@@ -111,6 +132,36 @@ class DecrypterApp:
         elif algo == "AES-256-GCM":
             self.add_param_entry("Key (Hex 32-byte / 64-char):", "key", width=65)
             self.add_param_entry("Nonce (Hex 12-byte / 24-char):", "nonce", width=65)
+            
+        elif algo == "DES":
+            self.add_param_entry("Key (8 Bytes/ASCII):", "key", width=30)
+        elif algo == "Blowfish":
+            self.add_param_entry("Key (ASCII):", "key", width=30)
+        elif algo == "ARC4":
+            self.add_param_entry("Key (ASCII):", "key", width=30)
+
+    def load_wordlist(self):
+        filepath = filedialog.askopenfilename(title="Select Wordlist (.txt)", filetypes=[("Text Files", "*.txt")])
+        if filepath:
+            with open(filepath, 'r', errors='ignore') as f:
+                self.wordlist = [line.strip() for line in f if line.strip()]
+            self.wordlist_frame.config(text=f"Cracking Wordlist (Currently {len(self.wordlist)} words)")
+            messagebox.showinfo("Success", f"Loaded {len(self.wordlist)} words into memory.")
+            
+    def download_wordlist(self):
+        def worker():
+            try:
+                self.wordlist_frame.config(text="Downloading 10k list...")
+                url = "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/Common-Credentials/10k-most-common.txt"
+                r = requests.get(url, timeout=10)
+                if r.status_code == 200:
+                    self.wordlist = [line.strip() for line in r.text.splitlines() if line.strip()]
+                    self.root.after(0, lambda: self.wordlist_frame.config(text=f"Cracking Wordlist (Currently {len(self.wordlist)} words)"))
+                    self.root.after(0, lambda: messagebox.showinfo("Success", f"Downloaded {len(self.wordlist)} words successfully."))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to download list:\n{e}"))
+                self.root.after(0, lambda: self.wordlist_frame.config(text=f"Cracking Wordlist (Currently {len(self.wordlist)} words)"))
+        threading.Thread(target=worker, daemon=True).start()
 
     def add_param_entry(self, label_text, param_name, width=30):
         frame = ttk.Frame(self.params_frame)
@@ -193,6 +244,26 @@ class DecrypterApp:
                     cipher_bytes = base64.b64decode(ciphertext)
                 
                 result = aesgcm.decrypt(nonce, cipher_bytes, None).decode('utf-8')
+                
+            elif algo == "DES":
+                key = self.param_widgets["key"].get().encode('utf-8')
+                if len(key) != 8:
+                    raise ValueError("DES key must be exactly 8 characters (8 bytes).")
+                cipher = DES.new(key, DES.MODE_ECB)
+                cipher_bytes = bytes.fromhex(ciphertext) if all(c in string.hexdigits for c in ciphertext) else base64.b64decode(ciphertext)
+                result = cipher.decrypt(cipher_bytes).decode('utf-8', errors='ignore')
+                
+            elif algo == "Blowfish":
+                key = self.param_widgets["key"].get().encode('utf-8')
+                cipher = Blowfish.new(key, Blowfish.MODE_ECB)
+                cipher_bytes = bytes.fromhex(ciphertext) if all(c in string.hexdigits for c in ciphertext) else base64.b64decode(ciphertext)
+                result = cipher.decrypt(cipher_bytes).decode('utf-8', errors='ignore')
+
+            elif algo == "ARC4":
+                key = self.param_widgets["key"].get().encode('utf-8')
+                cipher = ARC4.new(key)
+                cipher_bytes = bytes.fromhex(ciphertext) if all(c in string.hexdigits for c in ciphertext) else base64.b64decode(ciphertext)
+                result = cipher.decrypt(cipher_bytes).decode('utf-8', errors='ignore')
             
             else:
                 result = "Algorithm not implemented."
@@ -228,11 +299,12 @@ class DecrypterApp:
         except Exception:
             pass
             
+        common_words = {"the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not", "on", "with", "he", "as", "you", "do", "at", "this", "but", "his", "by", "from", "they", "we", "say", "her", "she", "or", "an", "will", "my", "one", "all", "would", "there", "their", "what"}
+        
         # 3. Caesar Cipher Brute Force
         best_shift = 0
         best_score = -1
         best_text = ""
-        common_words = {"the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not", "on", "with", "he", "as", "you", "do", "at", "this", "but", "his", "by", "from", "they", "we", "say", "her", "she", "or", "an", "will", "my", "one", "all", "would", "there", "their", "what"}
         
         for shift in range(1, 26):
             decrypted = self.decrypt_caesar(ciphertext, shift)
@@ -249,10 +321,90 @@ class DecrypterApp:
             self.plain_text.insert(tk.END, f"[DETECTED: Caesar Cipher (Shift {best_shift})]\n\n{best_text}")
             return
             
+        # 4. Vigenere Dictionary Attack
+        best_vig_score = -1
+        best_vig_keyword = ""
+        best_vig_text = ""
+        
+        for pwd in self.wordlist:
+            decrypted = self.decrypt_vigenere(ciphertext, pwd)
+            words = "".join([c if c.isalpha() else ' ' for c in decrypted]).lower().split()
+            score = sum(10 for w in words if w in common_words)
+            score += sum(1 for char in decrypted.lower() if char in "etaoinshrdlc")
+            
+            if score > best_vig_score:
+                best_vig_score = score
+                best_vig_keyword = pwd
+                best_vig_text = decrypted
+                
+        if best_vig_score > max(5, len(ciphertext) * 0.2): 
+            self.plain_text.insert(tk.END, f"[DETECTED: Vigenere Cipher]\n[CRACKED KEYWORD: '{best_vig_keyword}']\n\n{best_vig_text}")
+            return
+
+        # 5. Fernet Token Dictionary Attack
+        if ciphertext.startswith("gAAAAA"):
+            for pwd in self.wordlist:
+                try:
+                    padded_pwd = pwd.encode('utf-8').ljust(32, b'\0')
+                    b64_key = base64.urlsafe_b64encode(padded_pwd)
+                    f = Fernet(b64_key)
+                    result = f.decrypt(ciphertext.encode('utf-8')).decode('utf-8')
+                    if result:
+                        self.plain_text.insert(tk.END, f"[DETECTED: Fernet]\n[CRACKED KEY: '{pwd}']\n\n{result}")
+                        return
+                except Exception:
+                    pass
+                try:
+                    hash_pwd = hashlib.sha256(pwd.encode('utf-8')).digest()
+                    b64_key = base64.urlsafe_b64encode(hash_pwd)
+                    f = Fernet(b64_key)
+                    result = f.decrypt(ciphertext.encode('utf-8')).decode('utf-8')
+                    if result:
+                        self.plain_text.insert(tk.END, f"[DETECTED: Fernet]\n[CRACKED KEY (SHA256): '{pwd}']\n\n{result}")
+                        return
+                except Exception:
+                    pass
+
+        # 6. AES/DES/Blowfish/ARC4 Dictionary Attack (Assuming standard format)
+        try:
+            cipher_bytes = bytes.fromhex(ciphertext) if all(c in string.hexdigits for c in ciphertext) else base64.b64decode(ciphertext)
+            
+            # ARC4
+            for pwd in self.wordlist:
+                try:
+                    key = pwd.encode('utf-8')
+                    cipher = ARC4.new(key)
+                    result = cipher.decrypt(cipher_bytes).decode('utf-8')
+                    words = result.split()
+                    if sum(1 for w in words if w.lower() in common_words) > 0 and any(c.isalpha() for c in result):
+                        self.plain_text.insert(tk.END, f"[DETECTED: ARC4]\n[CRACKED KEY: '{pwd}']\n\n{result}")
+                        return
+                except Exception:
+                    pass
+
+            if len(cipher_bytes) > 28: # AES-GCM
+                nonce = cipher_bytes[:12]
+                actual_cipher = cipher_bytes[12:]
+                for pwd in self.wordlist:
+                    key1 = pwd.encode('utf-8').ljust(32, b'\0')
+                    key2 = hashlib.sha256(pwd.encode('utf-8')).digest()
+                    for key in (key1, key2):
+                        try:
+                            aesgcm = AESGCM(key)
+                            result = aesgcm.decrypt(nonce, actual_cipher, None).decode('utf-8')
+                            if result and any(c.isalpha() for c in result):
+                                self.plain_text.insert(tk.END, f"[DETECTED: AES-256-GCM]\n[CRACKED KEY: '{pwd}']\n\n{result}")
+                                return
+                        except Exception:
+                            pass
+                            
+        except Exception:
+            pass
+            
         # Failed to crack automatically
-        msg = ("[FAIL: Could not automatically detect or crack ciphertext]\n\n"
-               "If this is AES-256-GCM, Fernet, or Vigenere, you MUST provide the specific key in the corresponding algorithm tab. "
-               "Modern cryptography is mathematically designed to be unbreakable without the correct key!")
+        msg = ("[FAIL: Could not automatically crack ciphertext]\n\n"
+               "If this is AES-256-GCM or Fernet, it uses a 256-bit key. Modern cryptography is mathematically "
+               "designed to be unbreakable unless the key is extremely weak (which we tested) or you provide it directly.")
         self.plain_text.insert(tk.END, msg)
 
     def decrypt_caesar(self, text, shift):
